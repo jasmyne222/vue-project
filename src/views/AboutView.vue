@@ -71,9 +71,30 @@ export default {
         console.warn('Something went wrong')
       }
       this.storage = db
-    }
+    },
+    // Nouvelle fonction pour générer un document fake
+    generateFakeDocument() {
+    return {
+      _id: new Date().toISOString(), // ID unique basé sur la date
+      doc: {
+        post_name: 'Titre de démonstration',
+        post_content: 'Ceci est un contenu généré pour un document fake.',
+        attributes: {
+          creation_date: new Date().toISOString(),
+        },
+      },
+    } as Post;  // Cast en type Post
+  },
+
+  // Méthode pour ajouter un document fake à la base de données
+  addFakeDocument() {
+    const fakeDoc = this.generateFakeDocument();  // Générer un document fake
+    this.putDocument(fakeDoc);  // Utiliser la méthode putDocument pour l'ajouter à la base
+  }
+
   }
 }
+
 </script>
 
 <template>
@@ -86,4 +107,7 @@ export default {
         </p>
     </li>
   </ul>
+
+  <!-- Bouton pour ajouter un document fake -->
+  <button @click="addFakeDocument">Ajouter un document fake</button>
 </template>
