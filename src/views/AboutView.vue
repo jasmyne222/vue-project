@@ -66,7 +66,7 @@ export default {
     initDatabase() {
       const db = new PouchDB('http://admin:jijijaja@localhost:5984/database')
       if (db) {
-        console.log("Connected to collection 'post'")
+        console.log("Connected to collection ", db.name)
       } else {
         console.warn('Something went wrong')
       }
@@ -80,12 +80,10 @@ export default {
   <h1>Nombre de post: {{ postsData.length }}</h1>
   <ul>
     <li v-for="post in postsData" :key="post._id">
-      <div class="ucfirst">
-        {{ post.doc.post_name
-        }}<em style="font-size: x-small" v-if="post.doc.attributes?.creation_date">
-          - {{ post.doc.attributes?.creation_date }}
-        </em>
-      </div>
+        {{post.doc.post_name}}
+        <p v-for="school in post.doc.school" >  
+          {{ school.name  }} {{ school.type  }}
+        </p>
     </li>
   </ul>
 </template>
