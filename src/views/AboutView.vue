@@ -21,7 +21,7 @@ export default {
       postsData: [] as Post[],
       document: null as Post | null,
       storage: null as PouchDB.Database | null,
-      newContent: "", // Ajouté pour le champ de texte lors de la modification
+      newContent: '', // Ajouté pour le champ de texte lors de la modification
       fakeDocumentId: 1 // Compteur pour générer les IDs
     }
   },
@@ -37,6 +37,19 @@ export default {
       const db = ref(this.storage).value
       if (db) {
         db.put(document)
+          .then(() => {
+            console.log('Add ok')
+          })
+          .catch((error) => {
+            console.log('Add ko', error)
+          })
+      }
+    },
+
+    postDocument(document: Post) {
+      const db = ref(this.storage).value
+      if (db) {
+        db.post(document)
           .then(() => {
             console.log('Add ok')
           })
@@ -68,9 +81,9 @@ export default {
 
     // Initialisation de la base de données
     initDatabase() {
-      const db = new PouchDB('http://admin:jijijaja@localhost:5984/database')
+      const db = new PouchDB('http://admin:admin@localhost:5984/database')
       if (db) {
-        console.log("Connected to collection ", db.name)
+        console.log('Connected to collection ', db.name)
       } else {
         console.warn('Something went wrong')
       }
@@ -79,30 +92,27 @@ export default {
 
     // Générer un document fake avec un ID numérique croissant
     generateFakeDocument() {
-      const newId = this.fakeDocumentId++;  // Incrémente l'ID à chaque génération
+      const newId = this.fakeDocumentId++ // Incrémente l'ID à chaque génération
 
       return {
-        _id: newId.toString(), // Utilisation de l'ID numérique sous forme de chaîne de caractères
-        doc: {
-          post_name: 'Titre de démonstration',
-          post_content: 'Ceci est un contenu généré pour un document fake.',
-          attributes: {
-            creation_date: new Date().toISOString(),
-          },
-        },
-      } as Post;  // Cast en type Post
+        post_name: 'Post',
+        post_content: 'Ceci est un contenu généré pour un document fake.',
+        attributes: {
+          creation_date: new Date().toISOString()
+        }
+      } as Post // Cast en type Post
     },
 
     // Ajouter un document fake dans la base de données
     addFakeDocument() {
-      const fakeDoc = this.generateFakeDocument();  // Générer un document fake
-      this.putDocument(fakeDoc);  // Utiliser la méthode putDocument pour l'ajouter à la base
+      const fakeDoc = this.generateFakeDocument() // Générer un document fake
+      this.postDocument(fakeDoc) // Utiliser la méthode putDocument pour l'ajouter à la base
     },
 
     // Sélectionner un document pour modification
     selectDocument(post: Post) {
       this.document = post
-      this.newContent = post.doc.post_content  // Charger le contenu du document dans le champ de texte
+      this.newContent = post.doc.post_content // Charger le contenu du document dans le champ de texte
     },
 
     // Mettre à jour un document avec le nouveau contenu
@@ -113,32 +123,36 @@ export default {
 
         // Sauvegarder les modifications dans la base de données
         this.putDocument(updatedDoc)
-        this.fetchData()  // Rafraîchir les documents après la mise à jour
+        this.fetchData() // Rafraîchir les documents après la mise à jour
         console.log('Document mis à jour avec succès!')
       }
     },
 
     // Méthode pour supprimer un document
     deleteDocument(post: Post) {
-      const db = ref(this.storage).value;
-      if (db && post._id) {
-        db.get(post._id)  // Récupérer le document par son ID
+      console.log(post.doc._id)
+      console.log(post.id)
+      const db = ref(this.storage).value
+      if (db && post.id) {
+        db.get(post.id) // Récupérer le document par son ID
           .then((doc) => {
             if (!doc._rev) {
-              throw new Error("Version (_rev) manquante pour la suppression.");
+              throw new Error('Version (_rev) manquante pour la suppression.')
             }
-            console.log(`Tentative de suppression du document avec _id: ${doc._id} et _rev: ${doc._rev}`);
-            return db.remove(doc._id, doc._rev);  // Supprimer le document en utilisant _rev
+            console.log(
+              `Tentative de suppression du document avec _id: ${doc._id} et _rev: ${doc._rev}`
+            )
+            return db.remove(doc._id, doc._rev) // Supprimer le document en utilisant _rev
           })
           .then(() => {
-            console.log('Document supprimé avec succès!');
-            this.fetchData();  // Rafraîchir les documents après la suppression
+            console.log('Document supprimé avec succès!')
+            this.fetchData() // Rafraîchir les documents après la suppression
           })
           .catch((error) => {
-            console.error('Erreur lors de la suppression du document:', error);
-          });
+            console.error('Erreur lors de la suppression du document:', error)
+          })
       } else {
-        console.error("ID du document invalide ou base de données non initialisée.");
+        console.error('ID du document invalide ou base de données non initialisée.')
       }
     }
   }
@@ -151,7 +165,8 @@ export default {
     <ul>
       <li v-for="post in postsData" :key="post._id">
         <span @click="selectDocument(post)">{{ post.doc.post_name }}</span>
-        <button @click="deleteDocument(post)">Supprimer</button> <!-- Bouton de suppression -->
+        <button @click="deleteDocument(post)">Supprimer</button>
+        <!-- Bouton de suppression -->
       </li>
     </ul>
 
