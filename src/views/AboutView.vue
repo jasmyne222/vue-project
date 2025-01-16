@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import PouchDB from 'pouchdb'
 import PouchDBFind from 'pouchdb-find'
 
-PouchDB.plugin(PouchDBFind) // Activer la fonctionnalité d'indexation
+PouchDB.plugin(PouchDBFind)
 
 declare interface Post {
   _id: string
@@ -15,6 +15,7 @@ declare interface Post {
       creation_date: string
     }
   }
+  _attachments?: { [key: string]: any } // Médias associés
 }
 
 export default {
@@ -25,15 +26,16 @@ export default {
       storage: null as PouchDB.Database | null, // Base de données locale
       newContent: '', // Contenu modifié pour le formulaire
       fakeDocumentId: 1, // ID pour générer des documents factices
-      searchQuery: '' // Champ de recherche
+      searchQuery: '', // Champ de recherche
+      selectedFiles: [] as File[] // Liste des fichiers sélectionnés
     }
   },
 
   mounted() {
     this.initDatabase()
     this.createIndex() // Créer un index au démarrage
-    this.fetchData()
-    this.watchChanges() // Écoute les changements en temps réel
+    this.fetchData() // Charger les documents
+    this.watchChanges() // Écouter les changements en temps réel
   },
 
   methods: {
@@ -42,19 +44,19 @@ export default {
       const localDb = new PouchDB('local_database') // Base locale
       const remoteDb = new PouchDB('http://admin:admin@localhost:5984/database') // Base distante
 
-      this.storage = localDb // Utiliser la base locale
+      this.storage = localDb
       console.log('Base locale initialisée :', localDb.name)
       console.log('Base distante configurée :', remoteDb.name)
 
       this.syncDatabases(localDb, remoteDb) // Synchronisation automatique
     },
 
-    // **2. Créer un index pour l'attribut `doc.post_name`**
+    // **2. Créer un index pour `post_name`**
     createIndex() {
       const db = this.storage
       if (db) {
         db.createIndex({
-          index: { fields: ['doc.post_name'] } // Index sur `post_name`
+          index: { fields: ['doc.post_name'] }
         })
           .then(() => {
             console.log('Index créé avec succès sur `doc.post_name`.')
@@ -65,17 +67,22 @@ export default {
       }
     },
 
-    // **3. Recherche des documents par l'attribut indexé**
+    // **3. Rechercher des documents**
     searchByAttribute() {
       const db = this.storage
       if (db) {
+        if (!this.searchQuery.trim()) {
+          alert('Veuillez entrer un nom de post pour rechercher.')
+          return
+        }
+
         db.find({
           selector: {
-            'doc.post_name': { $regex: new RegExp(this.searchQuery, 'i') } // Recherche insensible à la casse
+            'doc.post_name': { $regex: new RegExp(this.searchQuery, 'i') }
           }
         })
           .then((result) => {
-            this.postsData = result.docs // Mettre à jour les données affichées
+            this.postsData = result.docs as Post[]
             console.log('Résultats de la recherche :', this.postsData)
           })
           .catch((error) => {
@@ -90,7 +97,7 @@ export default {
       if (db) {
         db.allDocs({ include_docs: true, attachments: true })
           .then((result) => {
-            this.postsData = result.rows.map((row) => row.doc) // Charger uniquement les documents
+            this.postsData = result.rows.map((row) => row.doc)
             console.log('Documents récupérés :', this.postsData)
           })
           .catch((error) => {
@@ -99,40 +106,14 @@ export default {
       }
     },
 
-    // **5. Factory pour générer de nombreux documents**
-    populateDatabase() {
-      const db = this.storage
-      if (db) {
-        const docs = Array.from({ length: 100 }, (_, index) => ({
-          _id: `fake_doc_${index + 1}`,
-          doc: {
-            post_name: `Post ${index + 1}`,
-            post_content: `Contenu généré pour le Post ${index + 1}`,
-            attributes: {
-              creation_date: new Date().toISOString()
-            }
-          }
-        })) // Générer 100 documents
-
-        db.bulkDocs(docs)
-          .then(() => {
-            console.log('Base de données peuplée avec succès.')
-            this.fetchData() // Rafraîchir les données après insertion
-          })
-          .catch((error) => {
-            console.error('Erreur lors du peuplement de la base :', error)
-          })
-      }
-    },
-
-    // **6. Ajouter un document fake**
+    // **5. Ajouter un document factice**
     generateFakeDocument() {
-      const newId = this.fakeDocumentId++
+      const newId = `post_${this.fakeDocumentId++}`
       return {
-        _id: newId.toString(),
+        _id: newId,
         doc: {
-          post_name: `Post ${newId}`,
-          post_content: 'Ceci est un contenu généré pour un document fake.',
+          post_name: `Post ${this.fakeDocumentId}`,
+          post_content: 'Ceci est un contenu généré pour un document.',
           attributes: {
             creation_date: new Date().toISOString()
           }
@@ -159,58 +140,55 @@ export default {
       }
     },
 
-    // **7. Modifier un document**
-    selectDocument(post: Post) {
-      this.document = post
-      this.newContent = post.doc.post_content // Charger le contenu actuel dans le formulaire
-    },
-
-    updateDocument() {
+    // **6. Ajouter des médias à un document**
+    async addMediaToDocument(document: Post) {
       const db = this.storage
-      if (this.document && db) {
-        const updatedDoc = { ...this.document } // Créer une copie
-        updatedDoc.doc.post_content = this.newContent // Modifier le contenu
+      if (!this.selectedFiles.length) {
+        alert('Veuillez sélectionner un ou plusieurs fichiers.')
+        return
+      }
 
-        db.put(updatedDoc)
-          .then((response) => {
-            console.log('Document mis à jour avec succès :', response)
-            const index = this.postsData.findIndex((doc) => doc._id === updatedDoc._id)
-            if (index !== -1) {
-              this.postsData[index] = { ...updatedDoc, _rev: response.rev } // Mettre à jour localement
-            }
-            this.document = null
-            this.newContent = ''
-          })
-          .catch((error) => {
-            console.error('Erreur lors de la mise à jour du document :', error)
-          })
+      if (db) {
+        try {
+          const updatedDoc = await db.get(document._id)
+
+          for (const file of this.selectedFiles) {
+            const arrayBuffer = await file.arrayBuffer()
+            await db.putAttachment(
+              updatedDoc._id,
+              file.name,
+              updatedDoc._rev,
+              arrayBuffer,
+              file.type
+            )
+            console.log(`Fichier ajouté : ${file.name}`)
+          }
+
+          this.selectedFiles = []
+          this.fetchData()
+        } catch (error) {
+          console.error('Erreur lors de l’ajout des médias :', error)
+        }
       }
     },
 
-    // **8. Supprimer un document**
-    deleteDocument(post: Post) {
-      const db = this.storage
-      if (db && post._id) {
-        db.get(post._id)
-          .then((doc) => db.remove(doc._id, doc._rev))
-          .then(() => {
-            console.log('Document supprimé avec succès.')
-            this.postsData = this.postsData.filter((doc) => doc._id !== post._id) // Supprimer localement
-          })
-          .catch((error) => {
-            console.error('Erreur lors de la suppression du document :', error)
-          })
+    // **7. Sélectionner des fichiers**
+    onFileChange(event: Event) {
+      const input = event.target as HTMLInputElement
+      if (input.files) {
+        this.selectedFiles = Array.from(input.files)
+        console.log(
+          'Fichiers sélectionnés :',
+          this.selectedFiles.map((file) => file.name)
+        )
       }
     },
 
-    // **9. Synchronisation des bases de données locale et distante**
+    // **8. Synchronisation locale et distante**
     syncDatabases(localDb: PouchDB.Database, remoteDb: PouchDB.Database) {
-      PouchDB.sync(localDb, remoteDb, {
-        live: true,
-        retry: true
-      })
+      PouchDB.sync(localDb, remoteDb, { live: true, retry: true })
         .on('change', (info) => {
-          console.log('Changements détectés lors de la synchronisation :', info)
+          console.log('Changements détectés :', info)
         })
         .on('paused', (err) => {
           console.log('Synchronisation en pause :', err || 'Aucune erreur')
@@ -223,14 +201,13 @@ export default {
         })
     },
 
-    // **10. Détecter les mises à jour**
     watchChanges() {
       const db = this.storage
       if (db) {
         db.changes({ since: 'now', live: true })
           .on('change', (change) => {
             console.log('Changement détecté :', change)
-            this.fetchData() // Rafraîchir les données locales
+            this.fetchData()
           })
           .on('error', (err) => {
             console.error("Erreur lors de l'écoute des changements :", err)
@@ -245,31 +222,39 @@ export default {
   <div>
     <h1>Nombre de posts : {{ postsData.length }}</h1>
 
-    <!-- Champ de recherche -->
+    <!-- Recherche -->
     <div>
-      <input type="text" v-model="searchQuery" placeholder="Post 22" />
+      <input type="text" v-model="searchQuery" placeholder="Entrez un nom de post" />
       <button @click="searchByAttribute">Rechercher</button>
     </div>
 
     <!-- Liste des documents -->
     <ul>
       <li v-for="post in postsData" :key="post._id">
-        <span @click="selectDocument(post)">{{ post.doc.post_name }}</span>
-        <button @click="deleteDocument(post)">Supprimer</button>
+        <div>
+          <span>{{ post.doc.post_name }}</span>
+        </div>
+
+        <!-- Médias associés -->
+        <div v-if="post._attachments">
+          <h4>Médias associés :</h4>
+          <ul>
+            <li v-for="(attachment, name) in post._attachments" :key="name">
+              {{ name }}
+              <button @click="deleteMediaFromDocument(post, name)">Supprimer</button>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Ajouter des médias -->
+        <div>
+          <input type="file" multiple @change="onFileChange" />
+          <button @click="addMediaToDocument(post)">Ajouter des médias</button>
+        </div>
       </li>
     </ul>
 
-    <!-- Formulaire pour modifier un document -->
-    <div v-if="document">
-      <h2>Modifier le contenu du post</h2>
-      <textarea v-model="newContent" rows="4" cols="50"></textarea>
-      <button @click="updateDocument">Mettre à jour le document</button>
-    </div>
-
-    <!-- Bouton pour ajouter un document fake -->
+    <!-- Ajouter un document factice -->
     <button @click="addFakeDocument">Ajouter un document fake</button>
-
-    <!-- Bouton pour peupler la base -->
-    <button @click="populateDatabase">Générer 100 documents</button>
   </div>
 </template>
