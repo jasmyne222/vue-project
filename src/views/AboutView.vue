@@ -1,260 +1,212 @@
+<template>
+  <div>
+    <h1>Gestion des Documents</h1>
+    <button @click="handleAddDocument">Ajouter un Document</button>
+    <button @click="populateDatabase">Générer des documents de test</button>
+    <input v-model="searchQuery" placeholder="Rechercher par titre..." @input="handleSearch" />
+    <ul>
+      <li v-for="doc in documents" :key="doc._id">
+        <h3>{{ doc.title }}</h3>
+        <p>{{ doc.content }}</p>
+        <button @click="handleUpdateDocument(doc._id)">Modifier</button>
+        <button @click="handleDeleteDocument(doc._id)">Supprimer</button>
+        <input type="file" multiple @change="handleMultipleFileUpload($event, doc._id)" />
+        <div v-if="doc._attachments">
+          <h4>Médias associés :</h4>
+          <ul>
+            <li v-for="(data, filename) in doc._attachments" :key="filename">
+              {{ filename }}
+              <button @click="handleDeleteAttachment(doc._id, filename)">Supprimer</button>
+            </li>
+          </ul>
+        </div>
+      </li>
+    </ul>
+  </div>
+</template>
+
 <script lang="ts">
-import { ref } from 'vue'
+import { defineComponent, ref, onMounted } from 'vue'
 import PouchDB from 'pouchdb'
 import PouchDBFind from 'pouchdb-find'
 
 PouchDB.plugin(PouchDBFind)
 
-declare interface Post {
-  _id: string
-  _rev?: string
-  doc: {
-    post_name: string
-    post_content: string
-    attributes: {
-      creation_date: string
-    }
-  }
-  _attachments?: { [key: string]: any } // Médias associés
+// Configuration de la base de données
+const remoteDB = new PouchDB('http://admin:admin@localhost:5984/database')
+const localDB = new PouchDB('local-database')
+
+// Synchronisation entre bases de données
+const syncDB = () => {
+  localDB
+    .sync(remoteDB, {
+      live: true,
+      retry: true
+    })
+    .on('change', (info) => {
+      console.log('Changements détectés:', info)
+    })
+    .on('error', (err) => {
+      console.error('Erreur de synchronisation:', err)
+    })
 }
 
-export default {
-  data() {
+syncDB()
+
+export default defineComponent({
+  setup() {
+    const documents = ref<any[]>([])
+    const searchQuery = ref('')
+
+    const fetchAllDocuments = async () => {
+      try {
+        const result = await localDB.allDocs({ include_docs: true })
+        documents.value = result.rows.map((row) => row.doc)
+      } catch (err) {
+        console.error('Erreur lors de la récupération des documents:', err)
+      }
+    }
+
+    const handleAddDocument = async () => {
+      const newDoc = {
+        _id: new Date().toISOString(),
+        title: `Post ${documents.value.length + 1}`,
+        content: 'Ceci est un contenu de test.',
+        createdAt: new Date().toISOString()
+      }
+      try {
+        await localDB.put(newDoc)
+        await localDB.replicate.to(remoteDB)
+        await fetchAllDocuments()
+      } catch (err) {
+        console.error("Erreur lors de l'ajout du document:", err)
+      }
+    }
+
+    const populateDatabase = async () => {
+      const bulkDocs = Array.from({ length: 20 }, (_, i) => ({
+        _id: `post_${i + 1}`,
+        title: `Post ${i + 1}`,
+        content: `Ceci est le contenu de Post ${i + 1}.`,
+        createdAt: new Date().toISOString()
+      }))
+
+      try {
+        await localDB.bulkDocs(bulkDocs)
+        await localDB.replicate.to(remoteDB)
+        await fetchAllDocuments()
+      } catch (err) {
+        console.error('Erreur lors de la génération des documents:', err)
+      }
+    }
+
+    const handleUpdateDocument = async (docId: string) => {
+      try {
+        const doc = await localDB.get(docId)
+        const updatedDoc = { ...doc, title: doc.title + ' (modifié)' }
+        await localDB.put(updatedDoc)
+        await localDB.replicate.to(remoteDB)
+        await fetchAllDocuments()
+      } catch (err) {
+        console.error('Erreur lors de la mise à jour du document:', err)
+      }
+    }
+
+    const handleDeleteDocument = async (docId: string) => {
+      try {
+        const doc = await localDB.get(docId)
+        await localDB.remove(doc)
+        await localDB.replicate.to(remoteDB)
+        await fetchAllDocuments()
+      } catch (err) {
+        console.error('Erreur lors de la suppression du document:', err)
+      }
+    }
+
+    const handleSearch = async () => {
+      try {
+        const result = await localDB.find({
+          selector: { title: { $regex: new RegExp(searchQuery.value, 'i') } }
+        })
+        documents.value = result.docs
+      } catch (err) {
+        console.error('Erreur lors de la recherche:', err)
+      }
+    }
+
+    const handleMultipleFileUpload = async (event: Event, docId: string) => {
+      const files = (event.target as HTMLInputElement).files
+      if (!files) return
+
+      try {
+        const doc = await localDB.get(docId)
+
+        for (const file of files) {
+          await localDB.putAttachment(docId, file.name, doc._rev, file, file.type)
+          const updatedDoc = await localDB.get(docId) // Refresh rev for each file
+          doc._rev = updatedDoc._rev
+        }
+
+        await localDB.replicate.to(remoteDB)
+        await fetchAllDocuments()
+      } catch (err) {
+        console.error("Erreur lors de l'ajout des fichiers:", err)
+      }
+    }
+
+    const handleDeleteAttachment = async (docId: string, filename: string) => {
+      try {
+        const doc = await localDB.get(docId)
+        await localDB.removeAttachment(docId, filename, doc._rev)
+        await localDB.replicate.to(remoteDB)
+        await fetchAllDocuments()
+      } catch (err) {
+        console.error('Erreur lors de la suppression du fichier:', err)
+      }
+    }
+
+    onMounted(() => {
+      fetchAllDocuments()
+    })
+
     return {
-      postsData: [] as Post[], // Liste des documents
-      document: null as Post | null, // Document sélectionné pour modification
-      storage: null as PouchDB.Database | null, // Base de données locale
-      newContent: '', // Contenu modifié pour le formulaire
-      fakeDocumentId: 1, // ID pour générer des documents factices
-      searchQuery: '', // Champ de recherche
-      selectedFiles: [] as File[] // Liste des fichiers sélectionnés
-    }
-  },
-
-  mounted() {
-    this.initDatabase()
-    this.createIndex() // Créer un index au démarrage
-    this.fetchData() // Charger les documents
-    this.watchChanges() // Écouter les changements en temps réel
-  },
-
-  methods: {
-    // **1. Initialisation de la base de données**
-    initDatabase() {
-      const localDb = new PouchDB('local_database') // Base locale
-      const remoteDb = new PouchDB('http://admin:admin@localhost:5984/database') // Base distante
-
-      this.storage = localDb
-      console.log('Base locale initialisée :', localDb.name)
-      console.log('Base distante configurée :', remoteDb.name)
-
-      this.syncDatabases(localDb, remoteDb) // Synchronisation automatique
-    },
-
-    // **2. Créer un index pour `post_name`**
-    createIndex() {
-      const db = this.storage
-      if (db) {
-        db.createIndex({
-          index: { fields: ['doc.post_name'] }
-        })
-          .then(() => {
-            console.log('Index créé avec succès sur `doc.post_name`.')
-          })
-          .catch((error) => {
-            console.error('Erreur lors de la création de l’index :', error)
-          })
-      }
-    },
-
-    // **3. Rechercher des documents**
-    searchByAttribute() {
-      const db = this.storage
-      if (db) {
-        if (!this.searchQuery.trim()) {
-          alert('Veuillez entrer un nom de post pour rechercher.')
-          return
-        }
-
-        db.find({
-          selector: {
-            'doc.post_name': { $regex: new RegExp(this.searchQuery, 'i') }
-          }
-        })
-          .then((result) => {
-            this.postsData = result.docs as Post[]
-            console.log('Résultats de la recherche :', this.postsData)
-          })
-          .catch((error) => {
-            console.error('Erreur lors de la recherche :', error)
-          })
-      }
-    },
-
-    // **4. Récupérer tous les documents**
-    fetchData() {
-      const db = this.storage
-      if (db) {
-        db.allDocs({ include_docs: true, attachments: true })
-          .then((result) => {
-            this.postsData = result.rows.map((row) => row.doc)
-            console.log('Documents récupérés :', this.postsData)
-          })
-          .catch((error) => {
-            console.error('Erreur lors de la récupération des données :', error)
-          })
-      }
-    },
-
-    // **5. Ajouter un document factice**
-    generateFakeDocument() {
-      const newId = `post_${this.fakeDocumentId++}`
-      return {
-        _id: newId,
-        doc: {
-          post_name: `Post ${this.fakeDocumentId}`,
-          post_content: 'Ceci est un contenu généré pour un document.',
-          attributes: {
-            creation_date: new Date().toISOString()
-          }
-        }
-      } as Post
-    },
-
-    addFakeDocument() {
-      const db = this.storage
-      const fakeDoc = this.generateFakeDocument()
-      if (db) {
-        db.put(fakeDoc)
-          .then((response) => {
-            console.log('Document ajouté avec succès :', response)
-            this.postsData.push({
-              ...fakeDoc,
-              _id: response.id,
-              _rev: response.rev
-            })
-          })
-          .catch((error) => {
-            console.error('Erreur lors de l’ajout du document :', error)
-          })
-      }
-    },
-
-    // **6. Ajouter des médias à un document**
-    async addMediaToDocument(document: Post) {
-      const db = this.storage
-      if (!this.selectedFiles.length) {
-        alert('Veuillez sélectionner un ou plusieurs fichiers.')
-        return
-      }
-
-      if (db) {
-        try {
-          const updatedDoc = await db.get(document._id)
-
-          for (const file of this.selectedFiles) {
-            const arrayBuffer = await file.arrayBuffer()
-            await db.putAttachment(
-              updatedDoc._id,
-              file.name,
-              updatedDoc._rev,
-              arrayBuffer,
-              file.type
-            )
-            console.log(`Fichier ajouté : ${file.name}`)
-          }
-
-          this.selectedFiles = []
-          this.fetchData()
-        } catch (error) {
-          console.error('Erreur lors de l’ajout des médias :', error)
-        }
-      }
-    },
-
-    // **7. Sélectionner des fichiers**
-    onFileChange(event: Event) {
-      const input = event.target as HTMLInputElement
-      if (input.files) {
-        this.selectedFiles = Array.from(input.files)
-        console.log(
-          'Fichiers sélectionnés :',
-          this.selectedFiles.map((file) => file.name)
-        )
-      }
-    },
-
-    // **8. Synchronisation locale et distante**
-    syncDatabases(localDb: PouchDB.Database, remoteDb: PouchDB.Database) {
-      PouchDB.sync(localDb, remoteDb, { live: true, retry: true })
-        .on('change', (info) => {
-          console.log('Changements détectés :', info)
-        })
-        .on('paused', (err) => {
-          console.log('Synchronisation en pause :', err || 'Aucune erreur')
-        })
-        .on('active', () => {
-          console.log('Synchronisation réactivée.')
-        })
-        .on('error', (err) => {
-          console.error('Erreur lors de la synchronisation :', err)
-        })
-    },
-
-    watchChanges() {
-      const db = this.storage
-      if (db) {
-        db.changes({ since: 'now', live: true })
-          .on('change', (change) => {
-            console.log('Changement détecté :', change)
-            this.fetchData()
-          })
-          .on('error', (err) => {
-            console.error("Erreur lors de l'écoute des changements :", err)
-          })
-      }
+      documents,
+      searchQuery,
+      handleAddDocument,
+      populateDatabase,
+      handleUpdateDocument,
+      handleDeleteDocument,
+      handleSearch,
+      handleMultipleFileUpload,
+      handleDeleteAttachment
     }
   }
-}
+})
 </script>
 
-<template>
-  <div>
-    <h1>Nombre de posts : {{ postsData.length }}</h1>
+<style scoped>
+button {
+  margin: 5px;
+  padding: 8px 12px;
+  border: none;
+  background-color: #007bff;
+  color: white;
+  cursor: pointer;
+}
 
-    <!-- Recherche -->
-    <div>
-      <input type="text" v-model="searchQuery" placeholder="Entrez un nom de post" />
-      <button @click="searchByAttribute">Rechercher</button>
-    </div>
+button:hover {
+  background-color: #0056b3;
+}
 
-    <!-- Liste des documents -->
-    <ul>
-      <li v-for="post in postsData" :key="post._id">
-        <div>
-          <span>{{ post.doc.post_name }}</span>
-        </div>
+ul {
+  list-style-type: none;
+  padding: 0;
+}
 
-        <!-- Médias associés -->
-        <div v-if="post._attachments">
-          <h4>Médias associés :</h4>
-          <ul>
-            <li v-for="(attachment, name) in post._attachments" :key="name">
-              {{ name }}
-              <button @click="deleteMediaFromDocument(post, name)">Supprimer</button>
-            </li>
-          </ul>
-        </div>
-
-        <!-- Ajouter des médias -->
-        <div>
-          <input type="file" multiple @change="onFileChange" />
-          <button @click="addMediaToDocument(post)">Ajouter des médias</button>
-        </div>
-      </li>
-    </ul>
-
-    <!-- Ajouter un document factice -->
-    <button @click="addFakeDocument">Ajouter un document fake</button>
-  </div>
-</template>
+li {
+  margin-bottom: 15px;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+}
+</style>
